@@ -1,51 +1,36 @@
-FROM richarvey/nginx-php-fpm:3.1.6
+FROM webdevops/php-nginx:8.4-alpine
 
-# Image config
-ENV SKIP_COMPOSER 0
-ENV WEBROOT /var/www/html/public
-ENV PHP_ERRORS_STDERR 1
-ENV RUN_SCRIPTS 1
-ENV REAL_IP_HEADER 1
+# Laravel needs these PHP extensions; the base image doesn't ship all of them
+RUN apk add --no-cache postgresql-dev libzip-dev icu-dev && \
+    docker-php-ext-install \
+    bcmath \
+    ctype \
+    fileinfo \
+    mbstring \
+    pdo_pgsql \
+    pgsql \
+    tokenizer \
+    xml \
+    intl \
+    zip \
+    opcache
 
-# Laravel config
-ENV APP_ENV production
-ENV APP_DEBUG false
-ENV LOG_CHANNEL stderr
+ENV WEB_DOCUMENT_ROOT=/app/public
+ENV APP_ENV=production
 
-# Allow composer to run as root
-ENV COMPOSER_ALLOW_SUPERUSER 1
+WORKDIR /app
 
-WORKDIR /var/www/html
-
-# Copy composer files first and install dependencies during the BUILD,
-# not at container startup. This avoids relying on runtime memory/network
-# and means every container boot already has a working vendor/ folder.
+# Install PHP dependencies first (better layer caching, and this is the
+# actual build-time step — nothing depends on it succeeding at runtime).
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloader
 
-# Now copy the rest of the application
+# Now copy the rest of the app
 COPY . .
-
-# Re-run composer to trigger any post-install scripts now that all app
-# files are present (artisan, etc.)
 RUN composer dump-autoload --optimize
 
-# Create the runtime deploy script (migrations/seed/cache only —
-# no composer install here, since vendor/ is already baked into the image).
-RUN mkdir -p scripts && \
-    printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'echo "Caching config..."' \
-    'php artisan config:cache' \
-    'echo "Caching routes..."' \
-    'php artisan route:cache' \
-    'echo "Linking storage..."' \
-    'php artisan storage:link || true' \
-    'echo "Running migrations..."' \
-    'php artisan migrate --force' \
-    'echo "Seeding database..."' \
-    'php artisan db:seed --force || true' \
-    > scripts/00-laravel-deploy.sh && \
-    chmod +x scripts/00-laravel-deploy.sh
-
-CMD ["/start.sh"]
+# At container startup: cache config/routes, link storage, run migrations
+# and seed the DB, then hand off to the base image's normal nginx+php-fpm
+# process manager (supervisord) so the server actually starts serving.
+CMD ["/bin/sh", "-c", "php artisan config:cache && php artisan route:cache && php artisan storage:link || true && php artisan migrate --force && php artisan db:seed --force || true && exec supervisord"]
