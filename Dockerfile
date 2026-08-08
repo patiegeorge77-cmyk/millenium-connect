@@ -1,7 +1,7 @@
 FROM webdevops/php-nginx:8.4-alpine
 
 # Laravel needs these PHP extensions; the base image doesn't ship all of them
-RUN apk add --no-cache postgresql-dev libzip-dev icu-dev && \
+RUN apk add --no-cache postgresql-dev libzip-dev icu-dev oniguruma-dev && \
     docker-php-ext-install \
     bcmath \
     ctype \
