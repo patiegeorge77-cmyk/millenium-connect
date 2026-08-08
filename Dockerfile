@@ -1,7 +1,5 @@
 FROM richarvey/nginx-php-fpm:3.1.6
 
-COPY . .
-
 # Image config
 ENV SKIP_COMPOSER 0
 ENV WEBROOT /var/www/html/public
@@ -17,13 +15,26 @@ ENV LOG_CHANNEL stderr
 # Allow composer to run as root
 ENV COMPOSER_ALLOW_SUPERUSER 1
 
-# Create the deploy script directly in the image, so it never depends on
-# a file surviving a manual GitHub upload.
+WORKDIR /var/www/html
+
+# Copy composer files first and install dependencies during the BUILD,
+# not at container startup. This avoids relying on runtime memory/network
+# and means every container boot already has a working vendor/ folder.
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloader
+
+# Now copy the rest of the application
+COPY . .
+
+# Re-run composer to trigger any post-install scripts now that all app
+# files are present (artisan, etc.)
+RUN composer dump-autoload --optimize
+
+# Create the runtime deploy script (migrations/seed/cache only —
+# no composer install here, since vendor/ is already baked into the image).
 RUN mkdir -p scripts && \
     printf '%s\n' \
     '#!/usr/bin/env bash' \
-    'echo "Running composer install..."' \
-    'composer install --no-dev --working-dir=/var/www/html --no-interaction --optimize-autoloader' \
     'echo "Caching config..."' \
     'php artisan config:cache' \
     'echo "Caching routes..."' \
